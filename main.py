@@ -1,4 +1,4 @@
-import os, json, io, re
+import os, json, re
 from datetime import date
 from fastapi import FastAPI, Request, HTTPException
 from linebot.v3 import WebhookHandler
@@ -6,7 +6,6 @@ from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, ImageMessageContent
 import google.generativeai as genai
-from PIL import Image
 
 app = FastAPI()
 
@@ -33,36 +32,51 @@ def handle_image_message(event):
     today = str(date.today())
 
     try:
-        # 1. 下載 LINE 圖片
+        # 1. 下載 LINE 圖片原始 byte 資料
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
-            image_content = blob_api.get_message_content(event.message.id)
-            image = Image.open(io.BytesIO(image_content))
+            image_bytes = blob_api.get_message_content(event.message.id)
 
-        # 2. 呼叫 Gemini 進行熱量估算 (多重模型嘗試避免 404)
+        # 封裝為標準圖片零件 (避免 PIL 相容性問題)
+        image_part = {
+            "mime_type": "image/jpeg",
+            "data": image_bytes
+        }
+
+        # 2. 自動列出並選擇支援的視覺模型
+        model_candidates = [
+            m.name for m in genai.list_models() 
+            if 'generateContent' in m.supported_generation_methods
+        ]
+        
+        # 優先挑選合適的模型名稱
+        target_model = None
+        for pref in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro", "gemini"]:
+            for name in model_candidates:
+                if pref in name:
+                    target_model = name
+                    break
+            if target_model:
+                break
+        
+        if not target_model and model_candidates:
+            target_model = model_candidates[0]
+
+        model = genai.GenerativeModel(target_model)
+        
         prompt = """
-        你是一位專業營養師。請分析照片中的食物並估算熱量，僅輸出標準 JSON，格式如下：
+        你是一位專業營養師。請分析照片中的食物並估算熱量，僅輸出合法 JSON：
         {
           "meal_name": "餐點名稱",
-          "items": [{"name": "食物名稱", "calories": 200}],
+          "items": [{"name": "品項名稱", "calories": 200}],
           "total_calories": 200
         }
         """
-        
-        response = None
-        for model_name in ["gemini-1.5-flash-latest", "models/gemini-1.5-flash", "gemini-1.5-flash", "gemini-1.5-pro-latest"]:
-            try:
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content([prompt, image])
-                if response and response.text:
-                    break
-            except Exception:
-                continue
 
-        if not response or not response.text:
-            raise Exception("AI 無法辨識此圖片，請換張照片再試一次。")
+        # 呼叫 Gemini
+        response = model.generate_content([prompt, image_part])
 
-        # 提取合法 JSON
+        # 3. 解析 JSON
         raw_text = response.text
         match = re.search(r'\{.*\}', raw_text, re.DOTALL)
         clean_json = match.group(0) if match else raw_text.strip()
@@ -70,7 +84,7 @@ def handle_image_message(event):
 
         meal_cals = data.get("total_calories", 0)
 
-        # 3. 計算累計與剩餘熱量
+        # 4. 計算剩餘熱量
         if user_id not in USER_DATA:
             USER_DATA[user_id] = {"target": DEFAULT_DAILY_TARGET, "records": {}}
 
@@ -87,8 +101,10 @@ def handle_image_message(event):
             f"📊 今日已攝取：{today_cals} / {USER_DATA[user_id]['target']} kcal\n"
             f"🎯 剩餘額度：{remaining} kcal"
         )
+
     except Exception as e:
-        reply = f"❌ 分析失敗：{str(e)}"
+        # 詳細印出錯誤，不再模糊帶過
+        reply = f"❌ 分析失敗：{type(e).__name__} - {str(e)}"
 
     with ApiClient(configuration) as api_client:
         MessagingApi(api_client).reply_message(
