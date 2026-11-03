@@ -173,7 +173,7 @@ def handle_text_message(event):
         }}
         """
         try:
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash")
             response = model.generate_content(profile_prompt)
             match = re.search(r'\{.*\}', response.text, re.DOTALL)
             pdata = json.loads(match.group(0) if match else response.text.strip())
@@ -224,7 +224,7 @@ def handle_text_message(event):
     }}
     """
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(diet_prompt)
         match = re.search(r'\{.*\}', response.text, re.DOTALL)
         data = json.loads(match.group(0) if match else response.text.strip())
@@ -258,16 +258,4 @@ def handle_text_message(event):
             f"🍽️ 【{data.get('meal_name', '餐點辨識')}】\n"
             f"{items_desc}\n"
             f"-------------------\n"
-            f"🔥 本餐總計：{meal_cals} kcal | 🥩 蛋白質 {meal_protein}g\n"
-            f"📊 今日熱量：{new_cals} / {t_cal} kcal (剩餘 {remaining_cals} kcal)\n"
-            f"💪 今日蛋白質：{new_protein} / {t_pro} g (尚需 {remaining_protein} g)\n"
-        )
-        if remaining_cals < 0:
-            reply += "\n⚠️ 今日熱量已稍微超額，建議多喝水休息！"
-        else:
-            reply += "\n👉 下一步：吃完下一餐時直接打字傳送；隨時可點擊下方按鈕查詢進度。"
-
-    except Exception as e:
-        reply = f"❌ 分析失敗：{str(e)}"
-
-    send_reply(event.reply_token, reply)
+            f"🔥 本餐總計
